@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>LeadScraper Pro | Seguro com Firebase</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        
+        // Configuração do Firebase - SUBSTITUA PELOS SEUS DADOS
+        const firebaseConfig = {
+            apiKey: "SUA_API_KEY",
+            authDomain: "SEU_PROJETO.firebaseapp.com",
+            projectId: "SEU_PROJETO",
+            storageBucket: "SEU_PROJETO.appspot.com",
+            messagingSenderId: "SEU_SENDER_ID",
+            appId: "SEU_APP_ID"
+        };
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        // Disponibilizar globais para o código TypeScript compilado
+        window.firebaseAuth = auth;
+        window.firebaseDb = db;
+        window.signInWithEmailAndPassword = signInWithEmailAndPassword;
+        window.createUserWithEmailAndPassword = createUserWithEmailAndPassword;
+        window.signOut = signOut;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.doc = doc;
+        window.getDoc = getDoc;
+        window.setDoc = setDoc;
+        window.updateDoc = updateDoc;
+        window.collection = collection;
+        window.query = query;
+        window.where = where;
+        window.getDocs = getDocs;
+    </script>
+    <script src="app.js"></script>
+</head>
+<body>
+    <!-- TELA DE AUTENTICAÇÃO -->
+    <div id="authContainer" class="auth-container" style="display: flex;">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <i class="fas fa-map-marked-alt"></i>
+                <span>LeadScraper<span class="text-purple">Pro</span></span>
+            </div>
+            <div id="loginForm">
+                <h2>Acessar plataforma</h2>
+                <input type="email" id="loginEmail" placeholder="Seu e-mail" autocomplete="email">
+                <input type="password" id="loginSenha" placeholder="Senha" autocomplete="current-password">
+                <button id="doLogin" class="btn-primary w-full">Entrar</button>
+                <p class="auth-switch">Não tem conta? <a href="#" id="showRegister">Cadastre-se grátis</a></p>
+                <div id="loginError" class="error-msg"></div>
+            </div>
+            <div id="registerForm" class="hidden">
+                <h2>Criar conta gratuita</h2>
+                <p class="free-badge">✓ Firebase Auth • Dados seguros em nuvem</p>
+                <input type="email" id="regEmail" placeholder="Seu e-mail" autocomplete="email">
+                <input type="password" id="regSenha" placeholder="Crie uma senha" autocomplete="new-password">
+                <button id="doRegister" class="btn-primary w-full">Cadastrar</button>
+                <p class="auth-switch">Já tem conta? <a href="#" id="showLogin">Faça login</a></p>
+                <div id="registerError" class="error-msg"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- APLICAÇÃO PRINCIPAL -->
+    <div id="appContainer" style="display: none;">
+        <div class="app-container">
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <div class="logo">
+                        <i class="fas fa-map-marked-alt"></i>
+                        <span>LeadScraper<span class="text-purple">Pro</span></span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-2">Prospecção segura com Firebase</p>
+                </div>
+                <div class="user-info">
+                    <i class="fas fa-user-circle"></i>
+                    <span id="userEmail">carregando...</span>
+                    <button id="logoutBtn" class="logout-btn"><i class="fas fa-sign-out-alt"></i></button>
+                </div>
+                <div class="credits-box">
+                    <i class="fas fa-coins"></i> Créditos disponíveis: <strong id="creditosSaldo">0</strong>
+                    <div class="remaining-leads">
+                        <i class="fas fa-chart-line"></i> Leads restantes: <strong id="remainingLeads">---</strong>
+                    </div>
+                    <button id="solicitarCreditosBtn" class="btn-credits"><i class="fas fa-gem"></i> Solicitar informações de liberação</button>
+                </div>
+
+                <!-- CONFIGURAÇÕES DAS APIS (agora salvas no Firestore) -->
+                <div class="config-section">
+                    <h4><i class="fas fa-key"></i> Chaves de API <span class="tooltip-icon" data-tooltip="Suas chaves pessoais - armazenadas com segurança">ⓘ</span></h4>
+                    <input type="password" id="apiKey" class="config-input" placeholder="Google / SerpApi / Apify">
+                    <input type="password" id="serpApiKey" class="config-input mt-2" placeholder="SerpApi Key (opcional)">
+                </div>
+
+                <!-- SEÇÃO ADMIN (visível apenas para superusuário) -->
+                <div id="adminSection" class="config-section admin-only" style="display: none;">
+                    <h4><i class="fas fa-crown"></i> Painel de Administração</h4>
+                    <button id="openAdminPanel" class="btn-save-config"><i class="fas fa-users-cog"></i> Gerenciar usuários e integrações</button>
+                </div>
+
+                <div class="config-section">
+                    <h4><i class="fas fa-sliders-h"></i> Parâmetros de extração</h4>
+                    <label>Delay (ms) <span class="tooltip-icon" data-tooltip="Tempo de espera entre requisições">ⓘ</span></label>
+                    <input type="number" id="delayRequests" class="config-input" value="500">
+                    <label>Timeout (ms) <span class="tooltip-icon" data-tooltip="Tempo máximo de espera">ⓘ</span></label>
+                    <input type="number" id="timeout" class="config-input" value="30000">
+                    <label>Avaliação mínima ★ <span class="tooltip-icon" data-tooltip="Filtra empresas com nota igual ou superior">ⓘ</span></label>
+                    <input type="number" id="minRating" class="config-input" value="0" step="0.5" min="0" max="5">
+                    <button id="saveConfig" class="btn-save-config mt-2">Salvar configurações</button>
+                </div>
+
+                <div class="config-section mt-4">
+                    <h4><i class="fas fa-chart-line"></i> Estatísticas</h4>
+                    <div class="flex justify-between"><span>Leads carregados:</span><span id="resultadosCount">0</span></div>
+                </div>
+                <div class="footer-note">
+                    <i class="fas fa-shield-alt"></i> Dados protegidos pelo Firebase
+                </div>
+            </aside>
+
+            <main class="main-content">
+                <div class="card-modern painel-busca">
+                    <h2><i class="fas fa-search text-purple-400"></i> Nova Prospecção</h2>
+                    <div class="grid-inputs">
+                        <div><label>Nicho</label><input type="text" id="nicho" placeholder="Ex: pizzaria" value="pizzaria"></div>
+                        <div><label>Cidade</label><input type="text" id="cidade" value="São Paulo"></div>
+                        <div><label>Estado (UF)</label><input type="text" id="estado" value="SP" maxlength="2"></div>
+                        <div><label>Palavra-chave extra</label><input type="text" id="palavraChave" placeholder="Opcional"></div>
+                        <div><label>Quantidade máx. leads</label><input type="number" id="quantidade" value="50" min="5" max="120" step="5"></div>
+                        <div><label>Tipo de busca</label>
+                            <select id="tipoBusca">
+                                <option value="googlePlacesMock">Google Places API (simulado - demo livre)</option>
+                                <option value="serpApi">SerpApi (requer ativação)</option>
+                                <option value="apify">Apify (requer ativação)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex justify-end"><button id="btnIniciar" class="btn-primary"><i class="fas fa-rocket"></i> Iniciar Prospecção</button></div>
+                </div>
+
+                <div class="card-modern">
+                    <div class="flex justify-between items-center flex-wrap gap-3 mb-4">
+                        <h2><i class="fas fa-table-list text-purple-400"></i> Leads extraídos</h2>
+                        <div class="tabela-toolbar">
+                            <div class="search-box"><i class="fas fa-search"></i><input type="text" id="buscaTabela" placeholder="Buscar..."></div>
+                            <div class="btn-group">
+                                <button id="copyTable" class="btn-icon"><i class="fas fa-copy"></i> Copiar</button>
+                                <button id="exportCSV" class="btn-icon"><i class="fas fa-file-csv"></i> CSV</button>
+                                <button id="exportJSON" class="btn-icon"><i class="fas fa-file-code"></i> JSON</button>
+                                <button id="exportXLSX" class="btn-icon"><i class="fas fa-file-excel"></i> Excel</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tabela-container">
+                        <table class="leads-table">
+                            <thead>
+                                <tr><th class="sortable-header" data-coluna="nome">Nome</th><th>Telefone</th><th>Endereço</th><th>Website</th><th>Categoria</th><th>Avaliação</th><th>Reviews</th><th>Latitude</th><th>Longitude</th></tr>
+                            </thead>
+                            <tbody id="leadsTableBody"><tr><td colspan="9" class="text-center py-8">Nenhum lead ainda. Faça uma prospecção.</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div id="pagination" class="mt-4 flex justify-center"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- MODAL DE ADMIN -->
+    <div id="adminModal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <span id="closeAdminModal" class="close">&times;</span>
+            <h3><i class="fas fa-crown"></i> Administração do Sistema</h3>
+            <div class="admin-tabs">
+                <button class="admin-tab active" data-tab="users">Usuários</button>
+                <button class="admin-tab" data-tab="integrations">Integrações (GitHub/Firebase)</button>
+                <button class="admin-tab" data-tab="global">Parâmetros Globais</button>
+            </div>
+            <div id="adminUsersPanel" class="admin-panel active">
+                <h4>Gerenciar usuários</h4>
+                <div id="usersList" class="users-list"></div>
+            </div>
+            <div id="adminIntegrationsPanel" class="admin-panel">
+                <h4>Configurações de integração (GitHub e Firebase)</h4>
+                <label>GitHub Token</label>
+                <input type="password" id="adminGithubToken" class="config-input" placeholder="GitHub Token">
+                <label>GitHub Repositório</label>
+                <input type="text" id="adminGithubRepo" class="config-input" placeholder="usuário/repositório">
+                <label>Firebase Config (somente leitura)</label>
+                <textarea id="adminFirebaseConfig" rows="2" class="config-input" readonly>Configuração fixa no código</textarea>
+                <button id="saveIntegrationsBtn" class="btn-primary mt-2">Salvar integrações</button>
+            </div>
+            <div id="adminGlobalPanel" class="admin-panel">
+                <h4>Parâmetros globais do sistema</h4>
+                <label>Delay global (ms)</label>
+                <input type="number" id="globalDelay" class="config-input" value="500">
+                <label>Timeout global (ms)</label>
+                <input type="number" id="globalTimeout" class="config-input" value="30000">
+                <button id="saveGlobalParamsBtn" class="btn-primary mt-2">Salvar parâmetros</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE SOLICITAÇÃO DE INFORMAÇÕES -->
+    <div id="creditsModal" class="modal hidden">
+        <div class="modal-content">
+            <span id="closeModal" class="close">&times;</span>
+            <h3><i class="fas fa-gem"></i> Solicitar informações de liberação</h3>
+            <p>Para acessar as APIs reais (SerpApi / Apify), entre em contato conosco:</p>
+            <div class="whatsapp-contact"><i class="fab fa-whatsapp"></i> <strong>WhatsApp: 34997824990</strong></div>
+            <div class="email-contact"><i class="fas fa-envelope"></i> <strong>E-mail: websitelogx@gmail.com</strong></div>
+            <div class="modal-buttons">
+                <button id="whatsappUpgrade" class="btn-whatsapp"><i class="fab fa-whatsapp"></i> Enviar mensagem</button>
+                <button id="emailUpgrade" class="btn-email"><i class="fas fa-envelope"></i> Enviar e-mail</button>
+            </div>
+            <p class="small mt-3">Envie seu e-mail cadastrado para que possamos liberar seus créditos e ativar as APIs reais.</p>
+        </div>
+    </div>
+</body>
+</html>
