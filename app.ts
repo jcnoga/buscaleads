@@ -1,6 +1,7 @@
 // app.ts - Versão final com controle de créditos, leads restantes e admin configurável
 // Superusuário: email@LeadScraperPro.com / Jcnvap123#
 
+
 // ==================== INTERFACES ====================
 
 interface Lead {
@@ -50,7 +51,7 @@ const STORAGE_SESSION = "leadscraper_session";
 const STORAGE_GLOBAL_CONFIG = "leadscraper_global_config";
 const DEFAULT_MAX_LEADS = 120;
 
-const SUPER_ADMIN_EMAIL = "email@LeadScraperPro.com";
+const SUPER_ADMIN_EMAIL = "admin@leadscraper.com";
 const SUPER_ADMIN_SENHA = "Jcnvap123#";
 
 // ==================== MOCK DATA ====================
@@ -120,8 +121,8 @@ function obterUsuarios(): Usuario[] {
   const superExists = users.some((u: Usuario) => u.email === SUPER_ADMIN_EMAIL);
   if (!superExists) {
     users.push({
-      email: SUPER_ADMIN_EMAIL,
-      senha: SUPER_ADMIN_SENHA,
+      email: "email@buscaleads.com",
+      senha: "Jcnvap6598$",
       creditos: 999999,
       createdAt: new Date().toISOString(),
       isSuperAdmin: true,

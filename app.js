@@ -1,28 +1,14 @@
-// app.js - Versão com Firebase Authentication e Firestore (código compilado)
-// Configure seu projeto Firebase e substitua as credenciais no index.html
-
-// ==================== INTERFACES (convertidas para JS) ====================
-
-// Estado da aplicação
-let currentUser = null;
-let currentProfile = null;
-let leadsAtuais = [];
-let leadsFiltrados = [];
-let paginaAtual = 1;
-const itensPorPagina = 10;
-let ordenacao = { coluna: "nome", direcao: "asc" };
-let termoBuscaTabela = "";
-
-// Elementos DOM
-let appContainer, authContainer, userEmailSpan, creditosSpan, remainingLeadsSpan;
-let tabelaBody, paginationDiv, buscaTabelaInput, resultadosCountSpan;
-
-// Constantes
+"use strict";
+// app.ts - Versão final com controle de créditos, leads restantes e admin configurável
+// Superusuário: email@LeadScraperPro.com / Jcnvap123#
+// ==================== CONSTANTES ====================
+const STORAGE_USERS = "leadscraper_users";
+const STORAGE_SESSION = "leadscraper_session";
+const STORAGE_GLOBAL_CONFIG = "leadscraper_global_config";
 const DEFAULT_MAX_LEADS = 120;
 const SUPER_ADMIN_EMAIL = "admin@leadscraper.com";
-
+const SUPER_ADMIN_SENHA = "Jcnvap123#";
 // ==================== MOCK DATA ====================
-
 const NICHOS_EMPRESAS = {
     pizzaria: ["Pizzaria Napoli", "Pizza Hut Express", "Domino's Pizza", "Pizzaria Bella Italia", "Forno a Lenha"],
     consultoria: ["McKinsey & Company", "BCG Brasil", "Deloitte Consulting", "EY Advisory", "KPMG"],
@@ -33,11 +19,9 @@ const NICHOS_EMPRESAS = {
 const CATEGORIAS = ["Alimentação", "Consultoria", "Jurídico", "Saúde", "Educação", "Tecnologia", "Varejo"];
 const WEBSITES = [".com.br", ".com", ".org", ".net"];
 const RUAS = ["Av. Paulista", "Rua Augusta", "Av. Brasil", "Rua Oscar Freire", "Av. das Nações Unidas"];
-
 function gerarTelefone() {
     return `(${Math.floor(Math.random() * 99) + 10}) ${Math.floor(Math.random() * 90000) + 10000}-${Math.floor(Math.random() * 9000) + 1000}`;
 }
-
 function gerarLead(nicho, cidade, estado, index) {
     const nomesNicho = NICHOS_EMPRESAS[nicho.toLowerCase()] || [`${nicho} ${cidade}`];
     const nomeBase = nomesNicho[index % nomesNicho.length];
@@ -57,141 +41,229 @@ function gerarLead(nicho, cidade, estado, index) {
         longitude: -46.6333 + (Math.random() - 0.5) * 0.1,
     };
 }
-
 function gerarLeadsMock(params) {
-    const count = Math.min(params.quantidade, DEFAULT_MAX_LEADS);
+    const maxPermitido = DEFAULT_MAX_LEADS;
+    const count = Math.min(params.quantidade, maxPermitido);
     const leads = [];
     for (let i = 0; i < count; i++) {
         let lead = gerarLead(params.nicho, params.cidade, params.estado, i);
-        if (lead.avaliacao < params.avaliacaoMinima) lead.avaliacao = params.avaliacaoMinima;
+        if (lead.avaliacao < params.avaliacaoMinima) {
+            lead.avaliacao = params.avaliacaoMinima;
+        }
         leads.push(lead);
     }
     return leads;
 }
-
-// ==================== FUNÇÕES DE AUTENTICAÇÃO E FIREBASE ====================
-
-function initFirebase() {
-    const auth = window.firebaseAuth;
-    const db = window.firebaseDb;
-    const signInWithEmailAndPassword = window.signInWithEmailAndPassword;
-    const createUserWithEmailAndPassword = window.createUserWithEmailAndPassword;
-    const signOut = window.signOut;
-    const onAuthStateChanged = window.onAuthStateChanged;
-    const doc = window.doc;
-    const getDoc = window.getDoc;
-    const setDoc = window.setDoc;
-    const updateDoc = window.updateDoc;
-    const collection = window.collection;
-    const query = window.query;
-    const where = window.where;
-    const getDocs = window.getDocs;
-
-    // Disponibilizar funções globalmente para uso posterior
-    window.__firestore = { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs };
-    window.__auth = { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut };
-
-    onAuthStateChanged(auth, async (user) => {
-        if (user) {
-            currentUser = user;
-            await carregarPerfilUsuario(user.uid);
-            mostrarApp();
-        } else {
-            currentUser = null;
-            currentProfile = null;
-            mostrarTelaLogin();
-        }
-    });
-}
-
-async function carregarPerfilUsuario(uid) {
-    const { doc, getDoc } = window.__firestore;
-    const docRef = doc(window.firebaseDb, "users", uid);
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-        currentProfile = docSnap.data();
-    } else {
-        // Criar perfil padrão
-        const newProfile = {
-            email: currentUser.email,
+// ==================== GERENCIAMENTO DE USUÁRIOS ====================
+function obterUsuarios() {
+    const stored = localStorage.getItem(STORAGE_USERS);
+    let users = stored ? JSON.parse(stored) : [];
+    const superExists = users.some((u) => u.email === SUPER_ADMIN_EMAIL);
+    if (!superExists) {
+        users.push({
+            email: "email@buscaleads.com",
+            senha: "Jcnvap6598$",
             creditos: 999999,
-            isSuperAdmin: currentUser.email === SUPER_ADMIN_EMAIL,
+            createdAt: new Date().toISOString(),
+            isSuperAdmin: true,
             apiKeys: { googleApiKey: "", serpApiKey: "" },
             costPerApi: { googlePlacesMock: 0, serpApi: 1, apify: 2 },
-            limits: { maxLeadsPerSearch: DEFAULT_MAX_LEADS },
-            createdAt: new Date()
-        };
-        await setDoc(docRef, newProfile);
-        currentProfile = newProfile;
+            limits: { maxLeadsPerSearch: DEFAULT_MAX_LEADS }
+        });
+        salvarUsuarios(users);
     }
-    atualizarInterfaceUsuario();
+    return users;
 }
-
-async function atualizarPerfil(updates) {
-    if (!currentUser) return;
-    const { doc, updateDoc } = window.__firestore;
-    const docRef = doc(window.firebaseDb, "users", currentUser.uid);
-    await updateDoc(docRef, updates);
-    if (currentProfile) Object.assign(currentProfile, updates);
-    atualizarInterfaceUsuario();
+function salvarUsuarios(usuarios) {
+    localStorage.setItem(STORAGE_USERS, JSON.stringify(usuarios));
 }
-
-async function atualizarChavesAPI(googleKey, serpKey) {
-    await atualizarPerfil({ apiKeys: { googleApiKey: googleKey, serpApiKey: serpKey } });
+function usuarioLogado() {
+    const email = localStorage.getItem(STORAGE_SESSION);
+    if (!email)
+        return null;
+    return obterUsuarios().find(u => u.email === email) || null;
 }
-
-async function atualizarCustoPorAPI(custos) {
-    const novosCustos = { ...currentProfile?.costPerApi, ...custos };
-    await atualizarPerfil({ costPerApi: novosCustos });
+function salvarSessao(email) {
+    localStorage.setItem(STORAGE_SESSION, email);
 }
-
-async function atualizarLimiteUsuario(maxLeads) {
-    await atualizarPerfil({ limits: { maxLeadsPerSearch: maxLeads } });
+function encerrarSessao() {
+    localStorage.removeItem(STORAGE_SESSION);
 }
-
-async function consumirCreditos(apiTipo, quantidadeLeads) {
-    if (!currentProfile) return false;
-    const custoPorLead = currentProfile.costPerApi?.[apiTipo] ?? 1;
+function cadastrar(email, senha) {
+    if (!email || !senha)
+        return { sucesso: false, mensagem: "Preencha todos os campos." };
+    if (!email.includes("@"))
+        return { sucesso: false, mensagem: "E-mail inválido." };
+    const usuarios = obterUsuarios();
+    if (usuarios.find(u => u.email === email)) {
+        return { sucesso: false, mensagem: "E-mail já cadastrado." };
+    }
+    const novoUsuario = {
+        email,
+        senha,
+        creditos: 999999,
+        createdAt: new Date().toISOString(),
+        apiKeys: { googleApiKey: "", serpApiKey: "" },
+        costPerApi: { googlePlacesMock: 0, serpApi: 1, apify: 2 },
+        limits: { maxLeadsPerSearch: DEFAULT_MAX_LEADS }
+    };
+    usuarios.push(novoUsuario);
+    salvarUsuarios(usuarios);
+    salvarSessao(email);
+    return { sucesso: true, mensagem: "Cadastro realizado! Modo demo livre." };
+}
+function login(email, senha) {
+    const usuarios = obterUsuarios();
+    const usuario = usuarios.find(u => u.email === email && u.senha === senha);
+    if (!usuario) {
+        return { sucesso: false, mensagem: "E-mail ou senha incorretos." };
+    }
+    salvarSessao(email);
+    return { sucesso: true, mensagem: "Login bem-sucedido." };
+}
+// Consumir créditos com base no custo por lead da API e quantidade
+function consumirCreditos(usuario, apiTipo, quantidadeLeads) {
+    if (!usuario)
+        return false;
+    const custoPorLead = usuario.costPerApi?.[apiTipo] ?? 1;
     const custoTotal = custoPorLead * quantidadeLeads;
-    if (currentProfile.creditos >= custoTotal) {
-        const novosCreditos = currentProfile.creditos - custoTotal;
-        await atualizarPerfil({ creditos: novosCreditos });
+    if (usuario.creditos >= custoTotal) {
+        usuario.creditos -= custoTotal;
+        // Atualizar na lista de usuários
+        const usuarios = obterUsuarios();
+        const idx = usuarios.findIndex(u => u.email === usuario.email);
+        if (idx !== -1) {
+            usuarios[idx].creditos = usuario.creditos;
+            salvarUsuarios(usuarios);
+        }
         return true;
     }
     return false;
 }
-
-async function adicionarCreditos(email, quantidade) {
-    const { collection, query, where, getDocs, doc, updateDoc } = window.__firestore;
-    const db = window.firebaseDb;
-    const usersRef = collection(db, "users");
-    const q = query(usersRef, where("email", "==", email));
-    const querySnapshot = await getDocs(q);
-    querySnapshot.forEach(async (docSnap) => {
-        const userData = docSnap.data();
-        const novosCreditos = (userData.creditos || 0) + quantidade;
-        await updateDoc(doc(db, "users", docSnap.id), { creditos: novosCreditos });
-    });
+function adicionarCreditos(email, quantidade) {
+    const usuarios = obterUsuarios();
+    const idx = usuarios.findIndex(u => u.email === email);
+    if (idx !== -1) {
+        usuarios[idx].creditos += quantidade;
+        salvarUsuarios(usuarios);
+    }
 }
-
-// ==================== INTERFACE DO USUÁRIO ====================
-
+function atualizarChavesAPI(email, googleKey, serpKey) {
+    const usuarios = obterUsuarios();
+    const idx = usuarios.findIndex(u => u.email === email);
+    if (idx !== -1) {
+        usuarios[idx].apiKeys = { googleApiKey: googleKey, serpApiKey: serpKey };
+        salvarUsuarios(usuarios);
+    }
+}
+function atualizarCustoPorAPI(email, custos) {
+    const usuarios = obterUsuarios();
+    const idx = usuarios.findIndex(u => u.email === email);
+    if (idx !== -1) {
+        usuarios[idx].costPerApi = { ...usuarios[idx].costPerApi, ...custos };
+        salvarUsuarios(usuarios);
+    }
+}
+function atualizarLimiteUsuario(email, maxLeads) {
+    const usuarios = obterUsuarios();
+    const idx = usuarios.findIndex(u => u.email === email);
+    if (idx !== -1) {
+        usuarios[idx].limits = { maxLeadsPerSearch: maxLeads };
+        salvarUsuarios(usuarios);
+    }
+}
+// ==================== CONFIGURAÇÕES GLOBAIS ====================
+let configGlobal = {
+    delayEntreRequisicoes: 500,
+    timeout: 30000,
+    githubToken: "",
+    githubRepo: "",
+    firebaseConfig: "",
+};
+function carregarConfigGlobal() {
+    const stored = localStorage.getItem(STORAGE_GLOBAL_CONFIG);
+    if (stored) {
+        try {
+            configGlobal = { ...configGlobal, ...JSON.parse(stored) };
+        }
+        catch (e) { }
+    }
+}
+function salvarConfigGlobal() {
+    localStorage.setItem(STORAGE_GLOBAL_CONFIG, JSON.stringify(configGlobal));
+}
+// ==================== ESTADO GLOBAL DA UI ====================
+let leadsAtuais = [];
+let leadsFiltrados = [];
+let paginaAtual = 1;
+const itensPorPagina = 10;
+let ordenacao = { coluna: "nome", direcao: "asc" };
+let termoBuscaTabela = "";
+let appContainer;
+let authContainer;
+let userEmailSpan;
+let creditosSpan;
+let remainingLeadsSpan;
+let tabelaBody;
+let paginationDiv;
+let buscaTabelaInput;
+let resultadosCountSpan;
+// ==================== FUNÇÕES DE UI ====================
 function mostrarTelaLogin() {
-    if (authContainer) authContainer.style.display = "flex";
-    if (appContainer) appContainer.style.display = "none";
+    if (authContainer)
+        authContainer.style.display = "flex";
+    if (appContainer)
+        appContainer.style.display = "none";
     document.getElementById("loginForm")?.classList.remove("hidden");
     document.getElementById("registerForm")?.classList.add("hidden");
-    const loginError = document.getElementById("loginError");
-    const registerError = document.getElementById("registerError");
-    if (loginError) loginError.textContent = "";
-    if (registerError) registerError.textContent = "";
+    document.getElementById("loginError").textContent = "";
+    document.getElementById("registerError").textContent = "";
 }
-
+function atualizarLeadsRestantes() {
+    const user = usuarioLogado();
+    if (!user) {
+        remainingLeadsSpan.textContent = "---";
+        return;
+    }
+    const tipoBusca = document.getElementById("tipoBusca").value;
+    let custoPorLead = user.costPerApi?.[tipoBusca];
+    if (custoPorLead === undefined)
+        custoPorLead = 1;
+    if (custoPorLead === 0) {
+        remainingLeadsSpan.textContent = "∞ (simulação)";
+        return;
+    }
+    const leadsRestantes = Math.floor(user.creditos / custoPorLead);
+    remainingLeadsSpan.textContent = String(leadsRestantes);
+}
+function atualizarSaldoUI() {
+    const user = usuarioLogado();
+    if (user) {
+        creditosSpan.textContent = user.creditos >= 999999 ? "∞ (demo)" : String(user.creditos);
+        atualizarLeadsRestantes();
+    }
+}
 function mostrarApp() {
-    if (authContainer) authContainer.style.display = "none";
-    if (appContainer) appContainer.style.display = "block";
-    atualizarInterfaceUsuario();
-    carregarConfiguracoesUsuario();
+    if (authContainer)
+        authContainer.style.display = "none";
+    if (appContainer)
+        appContainer.style.display = "block";
+    const user = usuarioLogado();
+    if (user) {
+        userEmailSpan.textContent = user.email;
+        creditosSpan.textContent = user.creditos >= 999999 ? "∞ (demo)" : String(user.creditos);
+        document.getElementById("apiKey").value = user.apiKeys?.googleApiKey || "";
+        document.getElementById("serpApiKey").value = user.apiKeys?.serpApiKey || "";
+        const adminSection = document.getElementById("adminSection");
+        if (user.isSuperAdmin) {
+            adminSection.style.display = "block";
+        }
+        else {
+            adminSection.style.display = "none";
+        }
+        atualizarLeadsRestantes();
+    }
+    carregarConfigGlobal();
     leadsAtuais = gerarLeadsMock({
         nicho: "pizzaria",
         cidade: "São Paulo",
@@ -201,64 +273,28 @@ function mostrarApp() {
     });
     aplicarFiltrosEOrdenacao();
 }
-
-function atualizarInterfaceUsuario() {
-    if (!currentProfile) return;
-    userEmailSpan.textContent = currentProfile.email;
-    const creditos = currentProfile.creditos;
-    creditosSpan.textContent = creditos >= 999999 ? "∞ (demo)" : String(creditos);
-    const apiKeyInput = document.getElementById("apiKey");
-    const serpKeyInput = document.getElementById("serpApiKey");
-    if (apiKeyInput) apiKeyInput.value = currentProfile.apiKeys?.googleApiKey || "";
-    if (serpKeyInput) serpKeyInput.value = currentProfile.apiKeys?.serpApiKey || "";
-    const adminSection = document.getElementById("adminSection");
-    if (currentProfile.isSuperAdmin) {
-        if (adminSection) adminSection.style.display = "block";
-    } else {
-        if (adminSection) adminSection.style.display = "none";
-    }
-    atualizarLeadsRestantes();
-}
-
-function atualizarLeadsRestantes() {
-    if (!currentProfile) {
-        if (remainingLeadsSpan) remainingLeadsSpan.textContent = "---";
-        return;
-    }
-    const tipoBuscaSelect = document.getElementById("tipoBusca");
-    const tipoBusca = tipoBuscaSelect ? tipoBuscaSelect.value : "googlePlacesMock";
-    let custoPorLead = currentProfile.costPerApi?.[tipoBusca];
-    if (custoPorLead === undefined) custoPorLead = 1;
-    if (custoPorLead === 0) {
-        if (remainingLeadsSpan) remainingLeadsSpan.textContent = "∞ (simulação)";
-        return;
-    }
-    const leadsRestantes = Math.floor(currentProfile.creditos / custoPorLead);
-    if (remainingLeadsSpan) remainingLeadsSpan.textContent = String(leadsRestantes);
-}
-
 function salvarChavesDoUsuario() {
-    const googleKey = document.getElementById("apiKey")?.value || "";
-    const serpKey = document.getElementById("serpApiKey")?.value || "";
-    atualizarChavesAPI(googleKey, serpKey);
-    alert("Chaves de API salvas com segurança no Firebase.");
+    const user = usuarioLogado();
+    if (!user)
+        return;
+    const googleKey = document.getElementById("apiKey").value;
+    const serpKey = document.getElementById("serpApiKey").value;
+    atualizarChavesAPI(user.email, googleKey, serpKey);
+    alert("Chaves de API salvas para este usuário.");
 }
-
-// ==================== FUNÇÕES DA TABELA ====================
-
+// ==================== RENDERIZAÇÃO DA TABELA ====================
 function aplicarFiltrosEOrdenacao() {
-    let filtrados = leadsAtuais.filter(lead =>
-        lead.nome.toLowerCase().includes(termoBuscaTabela.toLowerCase()) ||
+    let filtrados = leadsAtuais.filter(lead => lead.nome.toLowerCase().includes(termoBuscaTabela.toLowerCase()) ||
         lead.telefone.includes(termoBuscaTabela) ||
         lead.endereco.toLowerCase().includes(termoBuscaTabela.toLowerCase()) ||
-        lead.categoria.toLowerCase().includes(termoBuscaTabela.toLowerCase())
-    );
+        lead.categoria.toLowerCase().includes(termoBuscaTabela.toLowerCase()));
     filtrados.sort((a, b) => {
         let valorA = a[ordenacao.coluna];
         let valorB = b[ordenacao.coluna];
         if (typeof valorA === "string" && typeof valorB === "string") {
             return ordenacao.direcao === "asc" ? valorA.localeCompare(valorB) : valorB.localeCompare(valorA);
-        } else if (typeof valorA === "number" && typeof valorB === "number") {
+        }
+        else if (typeof valorA === "number" && typeof valorB === "number") {
             return ordenacao.direcao === "asc" ? valorA - valorB : valorB - valorA;
         }
         return 0;
@@ -268,30 +304,32 @@ function aplicarFiltrosEOrdenacao() {
     renderizarTabela();
     renderizarPaginacao();
 }
-
 function renderizarTabela() {
-    if (!tabelaBody) return;
+    if (!tabelaBody)
+        return;
     const inicio = (paginaAtual - 1) * itensPorPagina;
     const fim = inicio + itensPorPagina;
     const leadsPagina = leadsFiltrados.slice(inicio, fim);
-    if (resultadosCountSpan) resultadosCountSpan.textContent = `${leadsFiltrados.length} leads encontrados`;
-    tabelaBody.innerHTML = leadsPagina.map(lead => `
-        <tr class="border-t border-gray-700 hover:bg-gray-800 transition-colors">
-            <td class="px-4 py-3 font-medium">${escapeHtml(lead.nome)}</td>
-            <td class="px-4 py-3">${escapeHtml(lead.telefone)}</td>
-            <td class="px-4 py-3">${escapeHtml(lead.endereco)}</td>
-            <td class="px-4 py-3"><a href="https://${escapeHtml(lead.website)}" target="_blank" class="text-blue-400 hover:underline">${escapeHtml(lead.website)}</a></td>
-            <td class="px-4 py-3">${escapeHtml(lead.categoria)}</td>
-            <td class="px-4 py-3">${lead.avaliacao} ★</td>
-            <td class="px-4 py-3">${lead.quantidadeReviews}</td>
-            <td class="px-4 py-3">${lead.latitude.toFixed(4)}</td>
-            <td class="px-4 py-3">${lead.longitude.toFixed(4)}</td>
-        </tr>
-    `).join("");
+    resultadosCountSpan.textContent = `${leadsFiltrados.length} leads encontrados`;
+    tabelaBody.innerHTML = leadsPagina
+        .map((lead) => `
+    <tr class="border-t border-gray-700 hover:bg-gray-800 transition-colors">
+      <td class="px-4 py-3 font-medium">${escapeHtml(lead.nome)}</td>
+      <td class="px-4 py-3">${escapeHtml(lead.telefone)}</td>
+      <td class="px-4 py-3">${escapeHtml(lead.endereco)}</td>
+      <td class="px-4 py-3"><a href="https://${escapeHtml(lead.website)}" target="_blank" class="text-blue-400 hover:underline">${escapeHtml(lead.website)}</a></td>
+      <td class="px-4 py-3">${escapeHtml(lead.categoria)}</td>
+      <td class="px-4 py-3">${lead.avaliacao} ★</td>
+      <td class="px-4 py-3">${lead.quantidadeReviews}</td>
+      <td class="px-4 py-3">${lead.latitude.toFixed(4)}</td>
+      <td class="px-4 py-3">${lead.longitude.toFixed(4)}</td>
+     </tr>
+  `)
+        .join("");
 }
-
 function renderizarPaginacao() {
-    if (!paginationDiv) return;
+    if (!paginationDiv)
+        return;
     const totalPaginas = Math.ceil(leadsFiltrados.length / itensPorPagina);
     if (totalPaginas <= 1) {
         paginationDiv.innerHTML = "";
@@ -299,14 +337,18 @@ function renderizarPaginacao() {
     }
     let paginasHtml = "";
     for (let i = 1; i <= Math.min(totalPaginas, 10); i++) {
-        paginasHtml += `<button class="pagina-btn px-3 py-1 rounded-lg transition ${i === paginaAtual ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-300 hover:bg-gray-600"}" data-pagina="${i}">${i}</button>`;
+        paginasHtml += `
+      <button class="pagina-btn px-3 py-1 rounded-lg transition ${i === paginaAtual ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-300 hover:bg-gray-600"}" data-pagina="${i}">
+        ${i}
+      </button>
+    `;
     }
     paginationDiv.innerHTML = `
-        <button class="prev-btn px-3 py-1 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition" ${paginaAtual === 1 ? "disabled" : ""}>Anterior</button>
-        ${paginasHtml}
-        <button class="next-btn px-3 py-1 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition" ${paginaAtual === totalPaginas ? "disabled" : ""}>Próximo</button>
-    `;
-    document.querySelectorAll(".pagina-btn").forEach(btn => {
+    <button class="prev-btn px-3 py-1 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition" ${paginaAtual === 1 ? "disabled" : ""}>Anterior</button>
+    ${paginasHtml}
+    <button class="next-btn px-3 py-1 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition" ${paginaAtual === totalPaginas ? "disabled" : ""}>Próximo</button>
+  `;
+    document.querySelectorAll(".pagina-btn").forEach((btn) => {
         btn.addEventListener("click", (e) => {
             paginaAtual = parseInt(e.target.dataset.pagina || "1", 10);
             renderizarTabela();
@@ -315,27 +357,50 @@ function renderizarPaginacao() {
     });
     const prevBtn = document.querySelector(".prev-btn");
     const nextBtn = document.querySelector(".next-btn");
-    if (prevBtn) prevBtn.addEventListener("click", () => { if (paginaAtual > 1) { paginaAtual--; renderizarTabela(); renderizarPaginacao(); } });
-    if (nextBtn) nextBtn.addEventListener("click", () => { if (paginaAtual < totalPaginas) { paginaAtual++; renderizarTabela(); renderizarPaginacao(); } });
+    prevBtn?.addEventListener("click", () => {
+        if (paginaAtual > 1) {
+            paginaAtual--;
+            renderizarTabela();
+            renderizarPaginacao();
+        }
+    });
+    nextBtn?.addEventListener("click", () => {
+        if (paginaAtual < totalPaginas) {
+            paginaAtual++;
+            renderizarTabela();
+            renderizarPaginacao();
+        }
+    });
 }
-
 function ordenarTabela(coluna) {
     if (ordenacao.coluna === coluna) {
         ordenacao.direcao = ordenacao.direcao === "asc" ? "desc" : "asc";
-    } else {
+    }
+    else {
         ordenacao.coluna = coluna;
         ordenacao.direcao = "asc";
     }
     aplicarFiltrosEOrdenacao();
 }
-
 // ==================== EXPORTAÇÕES ====================
-
 function exportarCSV() {
-    if (leadsFiltrados.length === 0) { alert("Nenhum lead para exportar."); return; }
+    if (leadsFiltrados.length === 0) {
+        alert("Nenhum lead para exportar.");
+        return;
+    }
     const headers = ["Nome", "Telefone", "Endereço", "Website", "Categoria", "Avaliação", "Reviews", "Latitude", "Longitude"];
-    const rows = leadsFiltrados.map(lead => [lead.nome, lead.telefone, lead.endereco, lead.website, lead.categoria, lead.avaliacao, lead.quantidadeReviews, lead.latitude, lead.longitude]);
-    const csvContent = [headers, ...rows].map(row => row.join(",")).join("\n");
+    const rows = leadsFiltrados.map((lead) => [
+        lead.nome,
+        lead.telefone,
+        lead.endereco,
+        lead.website,
+        lead.categoria,
+        lead.avaliacao,
+        lead.quantidadeReviews,
+        lead.latitude,
+        lead.longitude,
+    ]);
+    const csvContent = [headers, ...rows].map((row) => row.join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -346,9 +411,11 @@ function exportarCSV() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
-
 function exportarJSON() {
-    if (leadsFiltrados.length === 0) { alert("Nenhum lead para exportar."); return; }
+    if (leadsFiltrados.length === 0) {
+        alert("Nenhum lead para exportar.");
+        return;
+    }
     const jsonContent = JSON.stringify(leadsFiltrados, null, 2);
     const blob = new Blob([jsonContent], { type: "application/json" });
     const link = document.createElement("a");
@@ -360,10 +427,19 @@ function exportarJSON() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
-
 function exportarXLSX() {
-    if (leadsFiltrados.length === 0) { alert("Nenhum lead para exportar."); return; }
-    let tabelaHTML = `<html><head><meta charset="UTF-8"><title>Leads</title></head><body><table border="1"><thead><tr><th>Nome</th><th>Telefone</th><th>Endereço</th><th>Website</th><th>Categoria</th><th>Avaliação</th><th>Reviews</th><th>Latitude</th><th>Longitude</th></tr></thead><tbody>`;
+    if (leadsFiltrados.length === 0) {
+        alert("Nenhum lead para exportar.");
+        return;
+    }
+    let tabelaHTML = `
+    <html>
+    <head><meta charset="UTF-8"><title>Leads</title></head>
+    <body>
+      <table border="1">
+        <thead><tr><th>Nome</th><th>Telefone</th><th>Endereço</th><th>Website</th><th>Categoria</th><th>Avaliação</th><th>Reviews</th><th>Latitude</th><th>Longitude</th></tr></thead>
+        <tbody>
+  `;
     leadsFiltrados.forEach(lead => {
         tabelaHTML += `<tr><td>${escapeHtml(lead.nome)}</td><td>${escapeHtml(lead.telefone)}</td><td>${escapeHtml(lead.endereco)}</td><td>${escapeHtml(lead.website)}</td><td>${escapeHtml(lead.categoria)}</td><td>${lead.avaliacao}</td><td>${lead.quantidadeReviews}</td><td>${lead.latitude.toFixed(4)}</td><td>${lead.longitude.toFixed(4)}</td></tr>`;
     });
@@ -378,329 +454,383 @@ function exportarXLSX() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
-
 function copiarDadosTabela() {
-    if (leadsFiltrados.length === 0) { alert("Nenhum dado para copiar."); return; }
-    const texto = leadsFiltrados.map(lead => `${lead.nome}\t${lead.telefone}\t${lead.endereco}\t${lead.website}\t${lead.categoria}\t${lead.avaliacao}\t${lead.quantidadeReviews}`).join("\n");
-    navigator.clipboard.writeText(texto).then(() => alert(`${leadsFiltrados.length} leads copiados.`)).catch(() => alert("Erro ao copiar."));
+    if (leadsFiltrados.length === 0) {
+        alert("Nenhum dado para copiar.");
+        return;
+    }
+    const texto = leadsFiltrados
+        .map((lead) => `${lead.nome}\t${lead.telefone}\t${lead.endereco}\t${lead.website}\t${lead.categoria}\t${lead.avaliacao}\t${lead.quantidadeReviews}`)
+        .join("\n");
+    navigator.clipboard
+        .writeText(texto)
+        .then(() => alert(`${leadsFiltrados.length} leads copiados.`))
+        .catch(() => alert("Erro ao copiar."));
 }
-
-// ==================== PROSPECÇÃO ====================
-
+// ==================== CARDS DAS PLATAFORMAS ====================
+const PLATAFORMAS = [
+    { id: "googlePlacesMock", nome: "Google Places API (Mock - Demo Grátis)", facilidade: 5, velocidade: 3, custoBeneficio: 5, limiteGratuito: "Ilimitado (demo)", qualidadeDados: 3, melhorUso: "Testes livres" },
+    { id: "serpApi", nome: "SerpApi (Requer ativação)", facilidade: 4, velocidade: 5, custoBeneficio: 4, limiteGratuito: "Créditos por lead", qualidadeDados: 5, melhorUso: "Dados reais" },
+    { id: "apify", nome: "Apify (Requer ativação)", facilidade: 4, velocidade: 4, custoBeneficio: 3, limiteGratuito: "Créditos por lead", qualidadeDados: 4, melhorUso: "Larga escala" },
+];
+function renderizarCardsPlataforma() {
+    const container = document.getElementById("plataformasContainer");
+    if (!container)
+        return;
+    container.innerHTML = PLATAFORMAS.map(p => `
+    <div class="card-plataforma bg-gray-800/50 rounded-xl p-5 border border-gray-700 hover:border-gray-600 transition-all">
+      <h3 class="text-lg font-bold mb-2">${p.nome}</h3>
+      <div class="space-y-1 text-sm">
+        <div class="flex justify-between"><span>Facilidade:</span><div class="stars">${"★".repeat(p.facilidade)}${"☆".repeat(5 - p.facilidade)}</div></div>
+        <div class="flex justify-between"><span>Velocidade:</span><div class="stars">${"★".repeat(p.velocidade)}${"☆".repeat(5 - p.velocidade)}</div></div>
+        <div class="flex justify-between"><span>Custo-benefício:</span><div class="stars">${"★".repeat(p.custoBeneficio)}${"☆".repeat(5 - p.custoBeneficio)}</div></div>
+        <div class="text-xs text-gray-400 mt-2"><i class="fas fa-gift mr-1"></i> ${p.limiteGratuito}</div>
+        <div class="text-xs text-purple-400"><i class="fas fa-lightbulb mr-1"></i> ${p.melhorUso}</div>
+      </div>
+    </div>
+  `).join("");
+}
+// ==================== PROSPECÇÃO COM CONSUMO DE CRÉDITOS ====================
 async function iniciarProspeccao() {
-    if (!currentProfile) return;
-    const nicho = document.getElementById("nicho")?.value || "";
-    const cidade = document.getElementById("cidade")?.value || "";
-    const estado = document.getElementById("estado")?.value || "";
-    const keyword = document.getElementById("palavraChave")?.value || "";
-    let quantidade = parseInt(document.getElementById("quantidade")?.value || "50");
-    const tipoBusca = document.getElementById("tipoBusca")?.value || "googlePlacesMock";
-    const avaliacaoMin = parseFloat(document.getElementById("minRating")?.value || "0");
-    if (isNaN(quantidade) || quantidade < 1) quantidade = 10;
-    const maxPermitido = currentProfile.limits?.maxLeadsPerSearch ?? DEFAULT_MAX_LEADS;
+    const nicho = document.getElementById("nicho").value;
+    const cidade = document.getElementById("cidade").value;
+    const estado = document.getElementById("estado").value;
+    const keyword = document.getElementById("palavraChave").value;
+    let quantidade = parseInt(document.getElementById("quantidade").value);
+    const tipoBusca = document.getElementById("tipoBusca").value;
+    const avaliacaoMin = parseFloat(document.getElementById("minRating").value) || 0;
+    if (isNaN(quantidade) || quantidade < 1)
+        quantidade = 10;
+    const user = usuarioLogado();
+    if (!user) {
+        alert("Usuário não logado.");
+        return;
+    }
+    const maxPermitido = user.limits?.maxLeadsPerSearch ?? DEFAULT_MAX_LEADS;
     if (quantidade > maxPermitido) {
         alert(`Limite máximo para este usuário é ${maxPermitido} leads por busca.`);
         quantidade = maxPermitido;
-        const qtdInput = document.getElementById("quantidade");
-        if (qtdInput) qtdInput.value = String(quantidade);
+        document.getElementById("quantidade").value = String(quantidade);
     }
-    const custoPorLead = currentProfile.costPerApi?.[tipoBusca] ?? 1;
+    const custoPorLead = user.costPerApi?.[tipoBusca] ?? 1;
     const custoTotal = custoPorLead * quantidade;
-    if (custoPorLead > 0 && currentProfile.creditos < custoTotal) {
-        alert(`Créditos insuficientes. Você possui ${currentProfile.creditos} créditos. Necessário ${custoTotal}. Solicite upgrade.`);
+    if (custoPorLead > 0 && user.creditos < custoTotal) {
+        alert(`Créditos insuficientes. Você possui ${user.creditos} créditos. Necessário ${custoTotal}. Solicite upgrade.`);
         abrirModalUpgrade();
         return;
     }
     if (custoPorLead > 0) {
-        if (!confirm(`Esta operação consumirá ${custoTotal} créditos (${custoPorLead} por lead). Deseja continuar?`)) return;
-        const consumido = await consumirCreditos(tipoBusca, quantidade);
+        const confirmMsg = `Esta operação consumirá ${custoTotal} créditos (${custoPorLead} por lead). Deseja continuar?`;
+        if (!confirm(confirmMsg))
+            return;
+        const consumido = consumirCreditos(user, tipoBusca, quantidade);
         if (!consumido) {
-            alert("Erro ao consumir créditos.");
+            alert("Erro ao consumir créditos. Tente novamente.");
             return;
         }
-        alert(`Créditos consumidos: ${custoTotal}. Saldo restante: ${currentProfile.creditos}`);
-    } else {
+        atualizarSaldoUI();
+        alert(`Créditos consumidos: ${custoTotal}. Saldo restante: ${user.creditos}`);
+    }
+    else {
+        // Custo zero: simulação livre, sem consumo
         alert(`Modo simulação (${tipoBusca}) - sem consumo de créditos.`);
     }
     const btn = document.getElementById("btnIniciar");
-    const original = btn ? btn.innerHTML : "";
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Prospectando...';
-    }
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Prospectando...';
     await new Promise(r => setTimeout(r, 1500));
-    const leads = gerarLeadsMock({ nicho: keyword || nicho, cidade, estado, quantidade, avaliacaoMinima: avaliacaoMin });
+    const leads = gerarLeadsMock({
+        nicho: keyword || nicho,
+        cidade,
+        estado,
+        quantidade,
+        avaliacaoMinima: avaliacaoMin,
+    });
     leadsAtuais = leads;
     termoBuscaTabela = "";
-    const buscaInput = document.getElementById("buscaTabela");
-    if (buscaInput) buscaInput.value = "";
+    document.getElementById("buscaTabela").value = "";
     aplicarFiltrosEOrdenacao();
     const notif = document.createElement("div");
     notif.className = "fixed bottom-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-fade-in";
-    notif.innerHTML = `<i class="fas fa-check-circle"></i> ${leads.length} leads gerados.`;
+    notif.innerHTML = `<i class="fas fa-check-circle"></i> ${leads.length} leads gerados. Saldo: ${usuarioLogado()?.creditos}`;
     document.body.appendChild(notif);
     setTimeout(() => notif.remove(), 3000);
-    if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = original;
-    }
+    btn.disabled = false;
+    btn.innerHTML = original;
 }
-
 // ==================== UPGRADE ====================
-
 function abrirModalUpgrade() {
-    const modal = document.getElementById("creditsModal");
-    if (modal) modal.classList.remove("hidden");
+    document.getElementById("creditsModal")?.classList.remove("hidden");
 }
 function fecharModalUpgrade() {
-    const modal = document.getElementById("creditsModal");
-    if (modal) modal.classList.add("hidden");
+    document.getElementById("creditsModal")?.classList.add("hidden");
 }
 function solicitarUpgradeWhatsApp() {
-    const email = currentProfile?.email || "";
+    const user = usuarioLogado();
+    const email = user ? user.email : "";
     const mensagem = `Olá, gostaria de informações sobre liberação de acesso. Meu e-mail: ${email}`;
     const telefone = "5534997824990";
-    const url = `https://web.whatsapp.com/send?phone=${telefone}&text=${encodeURIComponent(mensagem)}`;
-    window.open(url, '_blank');
+    const texto = encodeURIComponent(mensagem);
+    const url = `https://web.whatsapp.com/send?phone=${telefone}&text=${texto}`;
+    const win = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!win || win.closed || typeof win.closed === 'undefined') {
+        alert("Clique em OK para copiar o link e cole no navegador:\n\n" + url);
+        navigator.clipboard.writeText(url).then(() => alert("Link copiado!"));
+    }
+    else {
+        win.focus();
+    }
     fecharModalUpgrade();
 }
 function solicitarUpgradeEmail() {
-    const email = currentProfile?.email || "";
+    const user = usuarioLogado();
+    const email = user ? user.email : "";
     window.location.href = `mailto:websitelogx@gmail.com?subject=Informações%20de%20liberação&body=Meu%20e-mail:%20${email}`;
     fecharModalUpgrade();
 }
-
 // ==================== ADMIN ====================
-
-async function carregarListaUsuariosAdmin() {
-    if (!currentProfile?.isSuperAdmin) return;
-    const { collection, getDocs, doc, updateDoc } = window.__firestore;
-    const db = window.firebaseDb;
-    const usersRef = collection(db, "users");
-    const querySnapshot = await getDocs(usersRef);
+function abrirAdminPanel() {
+    const modal = document.getElementById("adminModal");
+    if (!modal)
+        return;
+    modal.classList.remove("hidden");
+    carregarListaUsuarios();
+    document.getElementById("adminGithubToken").value = configGlobal.githubToken;
+    document.getElementById("adminGithubRepo").value = configGlobal.githubRepo;
+    document.getElementById("adminFirebaseConfig").value = configGlobal.firebaseConfig;
+    document.getElementById("globalDelay").value = String(configGlobal.delayEntreRequisicoes);
+    document.getElementById("globalTimeout").value = String(configGlobal.timeout);
+}
+function fecharAdminPanel() {
+    document.getElementById("adminModal")?.classList.add("hidden");
+}
+function carregarListaUsuarios() {
+    const users = obterUsuarios();
     const container = document.getElementById("usersList");
-    if (!container) return;
-    container.innerHTML = "";
-    querySnapshot.forEach((docSnap) => {
-        const user = docSnap.data();
-        const uid = docSnap.id;
-        const div = document.createElement("div");
-        div.className = "user-item";
-        div.innerHTML = `
-            <strong>${escapeHtml(user.email)}</strong> ${user.isSuperAdmin ? '(Super Admin)' : ''}
-            <div class="user-chaves">
-                <input type="text" id="googleKey_${uid}" placeholder="Google API Key" value="${user.apiKeys?.googleApiKey || ''}">
-                <input type="text" id="serpKey_${uid}" placeholder="SerpApi Key" value="${user.apiKeys?.serpApiKey || ''}">
-                <button onclick="adminSalvarChaves('${uid}')">Salvar Chaves</button>
-            </div>
-            <div class="user-costs">
-                <label>Custo Mock:</label><input type="number" id="costMock_${uid}" value="${user.costPerApi?.googlePlacesMock ?? 0}" step="0.1" style="width:80px">
-                <label>SerpApi:</label><input type="number" id="costSerp_${uid}" value="${user.costPerApi?.serpApi ?? 1}" step="0.1" style="width:80px">
-                <label>Apify:</label><input type="number" id="costApify_${uid}" value="${user.costPerApi?.apify ?? 2}" step="0.1" style="width:80px">
-                <button onclick="adminSalvarCosts('${uid}')">Salvar Custos</button>
-            </div>
-            <div class="user-limits">
-                <label>Máx leads:</label><input type="number" id="limit_${uid}" value="${user.limits?.maxLeadsPerSearch ?? DEFAULT_MAX_LEADS}" style="width:100px">
-                <button onclick="adminSalvarLimite('${uid}')">Atualizar Limite</button>
-                <label>Créditos:</label><input type="number" id="creditos_${uid}" value="${user.creditos}" style="width:100px">
-                <button onclick="adminSalvarCreditos('${uid}')">Atualizar Créditos</button>
-            </div>
-        `;
-        container.appendChild(div);
-    });
-    window.adminSalvarChaves = async (uid) => {
-        const googleKey = document.getElementById(`googleKey_${uid}`)?.value || "";
-        const serpKey = document.getElementById(`serpKey_${uid}`)?.value || "";
-        const { doc, updateDoc } = window.__firestore;
-        const db = window.firebaseDb;
-        const userRef = doc(db, "users", uid);
-        await updateDoc(userRef, { apiKeys: { googleApiKey: googleKey, serpApiKey: serpKey } });
-        alert("Chaves atualizadas.");
+    if (!container)
+        return;
+    container.innerHTML = users.map(user => `
+    <div class="user-item">
+      <strong>${escapeHtml(user.email)}</strong> ${user.isSuperAdmin ? '(Super Admin)' : ''}
+      <div class="user-chaves">
+        <input type="text" id="googleKey_${user.email.replace(/[^a-z0-9]/gi, '_')}" placeholder="Google API Key" value="${user.apiKeys?.googleApiKey || ''}" style="flex:1">
+        <input type="text" id="serpKey_${user.email.replace(/[^a-z0-9]/gi, '_')}" placeholder="SerpApi Key" value="${user.apiKeys?.serpApiKey || ''}" style="flex:1">
+        <button onclick="adminSalvarChaves('${user.email}')">Salvar Chaves</button>
+      </div>
+      <div class="user-costs">
+        <label>Custo por lead (Mock):</label>
+        <input type="number" id="costMock_${user.email.replace(/[^a-z0-9]/gi, '_')}" value="${user.costPerApi?.googlePlacesMock ?? 0}" step="0.1" style="width:80px">
+        <label>SerpApi:</label>
+        <input type="number" id="costSerp_${user.email.replace(/[^a-z0-9]/gi, '_')}" value="${user.costPerApi?.serpApi ?? 1}" step="0.1" style="width:80px">
+        <label>Apify:</label>
+        <input type="number" id="costApify_${user.email.replace(/[^a-z0-9]/gi, '_')}" value="${user.costPerApi?.apify ?? 2}" step="0.1" style="width:80px">
+        <button onclick="adminSalvarCosts('${user.email}')">Salvar Custos</button>
+      </div>
+      <div class="user-limits">
+        <label>Máx leads por busca:</label>
+        <input type="number" id="limit_${user.email.replace(/[^a-z0-9]/gi, '_')}" value="${user.limits?.maxLeadsPerSearch ?? DEFAULT_MAX_LEADS}" style="width:100px">
+        <button onclick="adminSalvarLimite('${user.email}')">Atualizar Limite</button>
+        <label>Créditos:</label>
+        <input type="number" id="creditos_${user.email.replace(/[^a-z0-9]/gi, '_')}" value="${user.creditos}" style="width:100px">
+        <button onclick="adminSalvarCreditos('${user.email}')">Atualizar Créditos</button>
+      </div>
+    </div>
+  `).join("");
+    window.adminSalvarChaves = (email) => {
+        const safe = email.replace(/[^a-z0-9]/gi, '_');
+        const googleKey = document.getElementById(`googleKey_${safe}`).value;
+        const serpKey = document.getElementById(`serpKey_${safe}`).value;
+        atualizarChavesAPI(email, googleKey, serpKey);
+        alert(`Chaves de API salvas para ${email}`);
     };
-    window.adminSalvarCosts = async (uid) => {
-        const costMock = parseFloat(document.getElementById(`costMock_${uid}`)?.value || "0");
-        const costSerp = parseFloat(document.getElementById(`costSerp_${uid}`)?.value || "0");
-        const costApify = parseFloat(document.getElementById(`costApify_${uid}`)?.value || "0");
-        const { doc, updateDoc } = window.__firestore;
-        const db = window.firebaseDb;
-        const userRef = doc(db, "users", uid);
-        await updateDoc(userRef, { costPerApi: { googlePlacesMock: costMock, serpApi: costSerp, apify: costApify } });
-        alert("Custos atualizados.");
-        if (uid === currentUser.uid) atualizarLeadsRestantes();
+    window.adminSalvarCosts = (email) => {
+        const safe = email.replace(/[^a-z0-9]/gi, '_');
+        const costMock = parseFloat(document.getElementById(`costMock_${safe}`).value) || 0;
+        const costSerp = parseFloat(document.getElementById(`costSerp_${safe}`).value) || 0;
+        const costApify = parseFloat(document.getElementById(`costApify_${safe}`).value) || 0;
+        atualizarCustoPorAPI(email, { googlePlacesMock: costMock, serpApi: costSerp, apify: costApify });
+        if (email === usuarioLogado()?.email) {
+            atualizarLeadsRestantes();
+        }
+        alert(`Custos por API atualizados para ${email}`);
     };
-    window.adminSalvarLimite = async (uid) => {
-        const maxLeads = parseInt(document.getElementById(`limit_${uid}`)?.value || "120");
+    window.adminSalvarLimite = (email) => {
+        const safe = email.replace(/[^a-z0-9]/gi, '_');
+        const maxLeads = parseInt(document.getElementById(`limit_${safe}`).value);
         if (!isNaN(maxLeads)) {
-            const { doc, updateDoc } = window.__firestore;
-            const db = window.firebaseDb;
-            const userRef = doc(db, "users", uid);
-            await updateDoc(userRef, { limits: { maxLeadsPerSearch: maxLeads } });
-            alert("Limite atualizado.");
+            atualizarLimiteUsuario(email, maxLeads);
+            alert(`Limite de leads atualizado para ${maxLeads}`);
         }
     };
-    window.adminSalvarCreditos = async (uid) => {
-        const novosCreditos = parseFloat(document.getElementById(`creditos_${uid}`)?.value || "0");
+    window.adminSalvarCreditos = (email) => {
+        const safe = email.replace(/[^a-z0-9]/gi, '_');
+        const novosCreditos = parseFloat(document.getElementById(`creditos_${safe}`).value);
         if (!isNaN(novosCreditos)) {
-            const { doc, updateDoc } = window.__firestore;
-            const db = window.firebaseDb;
-            const userRef = doc(db, "users", uid);
-            await updateDoc(userRef, { creditos: novosCreditos });
-            alert("Créditos atualizados.");
-            if (uid === currentUser.uid) atualizarInterfaceUsuario();
+            const usuarios = obterUsuarios();
+            const idx = usuarios.findIndex(u => u.email === email);
+            if (idx !== -1) {
+                usuarios[idx].creditos = novosCreditos;
+                salvarUsuarios(usuarios);
+                alert(`Créditos de ${email} atualizados para ${novosCreditos}`);
+                if (usuarioLogado()?.email === email)
+                    atualizarSaldoUI();
+            }
         }
     };
 }
-
-// ==================== CONFIGURAÇÕES LOCAIS ====================
-
-function salvarConfiguracoesUsuario() {
-    const delay = parseInt(document.getElementById("delayRequests")?.value || "500");
-    const timeout = parseInt(document.getElementById("timeout")?.value || "30000");
-    const minRating = parseFloat(document.getElementById("minRating")?.value || "0");
-    if (currentUser) {
-        localStorage.setItem(`user_config_${currentUser.uid}`, JSON.stringify({ delay, timeout, minRating }));
-    }
-    alert("Configurações locais salvas.");
+function salvarIntegraçõesAdmin() {
+    configGlobal.githubToken = document.getElementById("adminGithubToken").value;
+    configGlobal.githubRepo = document.getElementById("adminGithubRepo").value;
+    configGlobal.firebaseConfig = document.getElementById("adminFirebaseConfig").value;
+    salvarConfigGlobal();
+    alert("Configurações de integração (GitHub/Firebase) salvas!");
 }
-
+function salvarParametrosGlobais() {
+    configGlobal.delayEntreRequisicoes = parseInt(document.getElementById("globalDelay").value) || 500;
+    configGlobal.timeout = parseInt(document.getElementById("globalTimeout").value) || 30000;
+    salvarConfigGlobal();
+    alert("Parâmetros globais salvos!");
+}
+// ==================== CONFIGURAÇÕES DO USUÁRIO ====================
+function salvarConfiguracoesUsuario() {
+    salvarChavesDoUsuario();
+    const delay = parseInt(document.getElementById("delayRequests").value);
+    const timeout = parseInt(document.getElementById("timeout").value);
+    const minRating = parseFloat(document.getElementById("minRating").value);
+    localStorage.setItem(`user_config_${usuarioLogado()?.email}`, JSON.stringify({ delay, timeout, minRating }));
+    alert("Configurações salvas localmente.");
+}
 function carregarConfiguracoesUsuario() {
-    if (!currentUser) return;
-    const saved = localStorage.getItem(`user_config_${currentUser.uid}`);
+    const user = usuarioLogado();
+    if (!user)
+        return;
+    const saved = localStorage.getItem(`user_config_${user.email}`);
     if (saved) {
         try {
             const cfg = JSON.parse(saved);
-            const delayInput = document.getElementById("delayRequests");
-            const timeoutInput = document.getElementById("timeout");
-            const minRatingInput = document.getElementById("minRating");
-            if (delayInput) delayInput.value = cfg.delay;
-            if (timeoutInput) timeoutInput.value = cfg.timeout;
-            if (minRatingInput) minRatingInput.value = cfg.minRating;
-        } catch(e) {}
+            document.getElementById("delayRequests").value = cfg.delay;
+            document.getElementById("timeout").value = cfg.timeout;
+            document.getElementById("minRating").value = cfg.minRating;
+        }
+        catch (e) { }
     }
 }
-
-// ==================== HELPERS ====================
-
+// ==================== UTILITÁRIOS ====================
 function escapeHtml(str) {
-    return str.replace(/[&<>]/g, m => m === "&" ? "&amp;" : m === "<" ? "&lt;" : "&gt;");
+    return str.replace(/[&<>]/g, function (m) {
+        if (m === "&")
+            return "&amp;";
+        if (m === "<")
+            return "&lt;";
+        if (m === ">")
+            return "&gt;";
+        return m;
+    });
 }
-
 function alternarDarkMode() {
     const html = document.documentElement;
     if (html.classList.contains("dark")) {
         html.classList.remove("dark");
         localStorage.setItem("theme", "light");
-    } else {
+    }
+    else {
         html.classList.add("dark");
         localStorage.setItem("theme", "dark");
     }
 }
-
 function carregarTema() {
     const saved = localStorage.getItem("theme");
     if (saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
         document.documentElement.classList.add("dark");
-    } else {
+    }
+    else {
         document.documentElement.classList.remove("dark");
     }
 }
-
 // ==================== EVENTOS E INICIALIZAÇÃO ====================
-
 function initEventListeners() {
-    const btnIniciar = document.getElementById("btnIniciar");
-    if (btnIniciar) btnIniciar.addEventListener("click", iniciarProspeccao);
-    const saveConfig = document.getElementById("saveConfig");
-    if (saveConfig) saveConfig.addEventListener("click", salvarConfiguracoesUsuario);
-    const themeToggle = document.getElementById("themeToggle");
-    if (themeToggle) themeToggle.addEventListener("click", alternarDarkMode);
-    const logoutBtn = document.getElementById("logoutBtn");
-    if (logoutBtn && window.__auth) logoutBtn.addEventListener("click", () => window.__auth.signOut(window.firebaseAuth));
-    const solicitarBtn = document.getElementById("solicitarCreditosBtn");
-    if (solicitarBtn) solicitarBtn.addEventListener("click", abrirModalUpgrade);
-    const closeModal = document.getElementById("closeModal");
-    if (closeModal) closeModal.addEventListener("click", fecharModalUpgrade);
-    const whatsappBtn = document.getElementById("whatsappUpgrade");
-    if (whatsappBtn) whatsappBtn.addEventListener("click", solicitarUpgradeWhatsApp);
-    const emailBtn = document.getElementById("emailUpgrade");
-    if (emailBtn) emailBtn.addEventListener("click", solicitarUpgradeEmail);
-    const openAdmin = document.getElementById("openAdminPanel");
-    if (openAdmin) openAdmin.addEventListener("click", async () => {
-        const adminModal = document.getElementById("adminModal");
-        if (adminModal) adminModal.classList.remove("hidden");
-        await carregarListaUsuariosAdmin();
+    document.getElementById("btnIniciar")?.addEventListener("click", iniciarProspeccao);
+    document.getElementById("saveConfig")?.addEventListener("click", salvarConfiguracoesUsuario);
+    document.getElementById("themeToggle")?.addEventListener("click", alternarDarkMode);
+    document.getElementById("logoutBtn")?.addEventListener("click", () => { encerrarSessao(); mostrarTelaLogin(); });
+    document.getElementById("solicitarCreditosBtn")?.addEventListener("click", abrirModalUpgrade);
+    document.getElementById("closeModal")?.addEventListener("click", fecharModalUpgrade);
+    document.getElementById("whatsappUpgrade")?.addEventListener("click", solicitarUpgradeWhatsApp);
+    document.getElementById("emailUpgrade")?.addEventListener("click", solicitarUpgradeEmail);
+    document.getElementById("openAdminPanel")?.addEventListener("click", abrirAdminPanel);
+    document.getElementById("closeAdminModal")?.addEventListener("click", fecharAdminPanel);
+    document.getElementById("saveIntegrationsBtn")?.addEventListener("click", salvarIntegraçõesAdmin);
+    document.getElementById("saveGlobalParamsBtn")?.addEventListener("click", salvarParametrosGlobais);
+    document.querySelectorAll(".admin-tab").forEach(tab => {
+        tab.addEventListener("click", (e) => {
+            const target = e.target.dataset.tab;
+            document.querySelectorAll(".admin-tab").forEach(t => t.classList.remove("active"));
+            document.querySelectorAll(".admin-panel").forEach(p => p.classList.remove("active"));
+            tab.classList.add("active");
+            if (target === "users")
+                document.getElementById("adminUsersPanel")?.classList.add("active");
+            if (target === "integrations")
+                document.getElementById("adminIntegrationsPanel")?.classList.add("active");
+            if (target === "global")
+                document.getElementById("adminGlobalPanel")?.classList.add("active");
+        });
     });
-    const closeAdmin = document.getElementById("closeAdminModal");
-    if (closeAdmin) closeAdmin.addEventListener("click", () => {
-        const adminModal = document.getElementById("adminModal");
-        if (adminModal) adminModal.classList.add("hidden");
-    });
-    const tipoBusca = document.getElementById("tipoBusca");
-    if (tipoBusca) tipoBusca.addEventListener("change", () => atualizarLeadsRestantes());
-    const exportCSV = document.getElementById("exportCSV");
-    if (exportCSV) exportCSV.addEventListener("click", exportarCSV);
-    const exportJSON = document.getElementById("exportJSON");
-    if (exportJSON) exportJSON.addEventListener("click", exportarJSON);
-    const exportXLSX = document.getElementById("exportXLSX");
-    if (exportXLSX) exportXLSX.addEventListener("click", exportarXLSX);
-    const copyTable = document.getElementById("copyTable");
-    if (copyTable) copyTable.addEventListener("click", copiarDadosTabela);
-    const buscaTabela = document.getElementById("buscaTabela");
-    if (buscaTabela) buscaTabela.addEventListener("input", (e) => {
+    document.getElementById("exportCSV")?.addEventListener("click", exportarCSV);
+    document.getElementById("exportJSON")?.addEventListener("click", exportarJSON);
+    document.getElementById("exportXLSX")?.addEventListener("click", exportarXLSX);
+    document.getElementById("copyTable")?.addEventListener("click", copiarDadosTabela);
+    document.getElementById("buscaTabela")?.addEventListener("input", (e) => {
         termoBuscaTabela = e.target.value;
         aplicarFiltrosEOrdenacao();
     });
     document.querySelectorAll(".sortable-header").forEach(header => {
         header.addEventListener("click", () => {
             const coluna = header.getAttribute("data-coluna");
-            if (coluna) ordenarTabela(coluna);
+            if (coluna)
+                ordenarTabela(coluna);
         });
     });
-    // Autenticação via Firebase
-    const doLogin = document.getElementById("doLogin");
-    if (doLogin && window.__auth) {
-        doLogin.addEventListener("click", async () => {
-            const email = document.getElementById("loginEmail")?.value || "";
-            const senha = document.getElementById("loginSenha")?.value || "";
-            try {
-                await window.__auth.signInWithEmailAndPassword(window.firebaseAuth, email, senha);
-            } catch (error) {
-                const loginError = document.getElementById("loginError");
-                if (loginError) loginError.textContent = "E-mail ou senha inválidos.";
-            }
-        });
-    }
-    const doRegister = document.getElementById("doRegister");
-    if (doRegister && window.__auth) {
-        doRegister.addEventListener("click", async () => {
-            const email = document.getElementById("regEmail")?.value || "";
-            const senha = document.getElementById("regSenha")?.value || "";
-            try {
-                await window.__auth.createUserWithEmailAndPassword(window.firebaseAuth, email, senha);
-            } catch (error) {
-                const registerError = document.getElementById("registerError");
-                if (registerError) registerError.textContent = "Erro ao cadastrar. Verifique os dados.";
-            }
-        });
-    }
-    const showRegister = document.getElementById("showRegister");
-    if (showRegister) {
-        showRegister.addEventListener("click", (e) => {
-            e.preventDefault();
-            document.getElementById("loginForm")?.classList.add("hidden");
-            document.getElementById("registerForm")?.classList.remove("hidden");
-        });
-    }
-    const showLogin = document.getElementById("showLogin");
-    if (showLogin) {
-        showLogin.addEventListener("click", (e) => {
-            e.preventDefault();
-            document.getElementById("registerForm")?.classList.add("hidden");
-            document.getElementById("loginForm")?.classList.remove("hidden");
-        });
-    }
+    // Atualizar leads restantes quando mudar o tipo de busca
+    document.getElementById("tipoBusca")?.addEventListener("change", () => {
+        atualizarLeadsRestantes();
+    });
+    document.getElementById("doLogin")?.addEventListener("click", () => {
+        const email = document.getElementById("loginEmail").value;
+        const senha = document.getElementById("loginSenha").value;
+        const res = login(email, senha);
+        if (res.sucesso) {
+            mostrarApp();
+            carregarConfiguracoesUsuario();
+        }
+        else {
+            document.getElementById("loginError").textContent = res.mensagem;
+        }
+    });
+    document.getElementById("doRegister")?.addEventListener("click", () => {
+        const email = document.getElementById("regEmail").value;
+        const senha = document.getElementById("regSenha").value;
+        const res = cadastrar(email, senha);
+        if (res.sucesso) {
+            alert(res.mensagem);
+            mostrarApp();
+            carregarConfiguracoesUsuario();
+        }
+        else {
+            document.getElementById("registerError").textContent = res.mensagem;
+        }
+    });
+    document.getElementById("showRegister")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        document.getElementById("loginForm")?.classList.add("hidden");
+        document.getElementById("registerForm")?.classList.remove("hidden");
+    });
+    document.getElementById("showLogin")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        document.getElementById("registerForm")?.classList.add("hidden");
+        document.getElementById("loginForm")?.classList.remove("hidden");
+    });
 }
-
 function init() {
     appContainer = document.getElementById("appContainer");
     authContainer = document.getElementById("authContainer");
@@ -712,8 +842,14 @@ function init() {
     buscaTabelaInput = document.getElementById("buscaTabela");
     resultadosCountSpan = document.getElementById("resultadosCount");
     carregarTema();
-    initFirebase();
+    carregarConfigGlobal();
+    if (usuarioLogado()) {
+        mostrarApp();
+        carregarConfiguracoesUsuario();
+    }
+    else {
+        mostrarTelaLogin();
+    }
     initEventListeners();
 }
-
 document.addEventListener("DOMContentLoaded", init);
